@@ -19,7 +19,7 @@ st.set_page_config(
 # =========================
 @st.cache_resource
 def load_and_train_model():
-    df = pd.read_csv("imu_data.csv")
+    df =pd.read_csv("imu_data_small.csv")
     df = df.head(20000)
 
     features = [

@@ -1,41 +1,17 @@
 import numpy as np
 import pandas as pd
+import joblib
 import streamlit as st
+model=joblib.load("ai_model.pkl")
+scaler_x=joblib.load("scaler_x.pkl")
+scaler_y=joblib.load("scaler_y.pkl")
 import plotly.graph_objects as go
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error,r2_score
 import streamlit.components.v1 as components
 
-@st.cache_resource  
-def load_and_train_model():
-    df = pd.read_csv("imu_data_fixed.csv")
-
-    features = [
-        "accel_x", "accel_y", "accel_z",
-        "gyro_x", "gyro_y", "gyro_z",
-        "mag_x", "mag_y", "mag_z"
-    ]
-
-    targets = ["roll", "pitch", "yaw"]
-
-    X = df[features]
-    y = df[targets]
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    model = MLPRegressor(
-        hidden_layer_sizes=(128, 64),
-        activation='relu',
-        max_iter=300,
-        random_state=42
-    )
-
-    model.fit(X_scaled, y)
-
-    return model, scaler
-
-
-model, scaler = load_and_train_model()
 # =========================
 # Conversion Functions
 # =========================
@@ -150,7 +126,7 @@ with left_col:
 # =========================
 if predict:
     sample = [
-        accel_x, accel_y, accel_z,
+        accel_x/9.8, accel_y/9.8, accel_z/9.8,
         gyro_x, gyro_y, gyro_z,
         mag_x, mag_y, mag_z
     ]
@@ -160,9 +136,15 @@ if predict:
     if np.all(sample_array == 0):
         roll, pitch, yaw = 0.0, 0.0, 0.0
     else:
-        sample_array_scaled = scaler.transform(sample_array)
-        pred = model.predict(sample_array_scaled)[0]
-        roll, pitch, yaw = pred
+      sample_array_scaled = scaler_x.transform(sample_array)
+      y_pred_scaled = model.predict(sample_array_scaled)
+      y_pred = scaler_y.inverse_transform(y_pred_scaled)
+      roll = -y_pred[0][0]
+      pitch = -y_pred[0][1]
+      yaw_sin = y_pred[0][2]
+      yaw_cos = y_pred[0][3]
+      yaw = np.arctan2(yaw_sin, yaw_cos)
+      yaw =-yaw
 
     quat = euler_to_quaternion(roll, pitch, yaw)
     dcm = euler_to_dcm(roll, pitch, yaw)

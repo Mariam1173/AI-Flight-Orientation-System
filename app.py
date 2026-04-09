@@ -1,26 +1,14 @@
 import numpy as np
 import pandas as pd
 import streamlit as st
-from sklearn.ensemble import RandomForestRegressor
+import plotly.graph_objects as go
+from sklearn.preprocessing import StandardScaler
+from sklearn.neural_network import MLPRegressor
+import streamlit.components.v1 as components
 
-
-# =========================
-# Page Config
-# =========================
-st.set_page_config(
-    page_title="AI Flight Orientation System",
-    page_icon="🚀",
-    layout="wide"
-)
-
-
-# =========================
-# Load Data & Train Model
-# =========================
-@st.cache_resource
+@st.cache_resource  
 def load_and_train_model():
-    df =pd.read_csv("imu_data_small.csv")
-    df = df.head(20000)
+    df = pd.read_csv("imu_data_fixed.csv")
 
     features = [
         "accel_x", "accel_y", "accel_z",
@@ -33,19 +21,21 @@ def load_and_train_model():
     X = df[features]
     y = df[targets]
 
-    model = RandomForestRegressor(
-        n_estimators=100,
-        random_state=42,
-        n_jobs=-1
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    model = MLPRegressor(
+        hidden_layer_sizes=(128, 64),
+        activation='relu',
+        max_iter=300,
+        random_state=42
     )
-    model.fit(X, y)
 
-    return model
+    model.fit(X_scaled, y)
 
-
-model = load_and_train_model()
+    return model, scaler
 
 
+model, scaler = load_and_train_model()
 # =========================
 # Conversion Functions
 # =========================
@@ -167,33 +157,100 @@ if predict:
 
     sample_array = np.array(sample).reshape(1, -1)
 
-    pred = model.predict(sample_array)[0]
-    roll, pitch, yaw = pred
+    if np.all(sample_array == 0):
+        roll, pitch, yaw = 0.0, 0.0, 0.0
+    else:
+        sample_array_scaled = scaler.transform(sample_array)
+        pred = model.predict(sample_array_scaled)[0]
+        roll, pitch, yaw = pred
 
     quat = euler_to_quaternion(roll, pitch, yaw)
     dcm = euler_to_dcm(roll, pitch, yaw)
-
     with right_col:
-        st.success("Prediction Completed Successfully")
+            st.success("Prediction Completed Successfully")
 
-        st.subheader("Results")
+            st.subheader("Results")
 
-        st.markdown("### Euler Angles")
-        st.write(f"**Roll:** {roll:.6f}")
-        st.write(f"**Pitch:** {pitch:.6f}")
-        st.write(f"**Yaw:** {yaw:.6f}")
+            st.markdown("### Euler Angles")
+            st.write(f"**Roll:** {roll:.6f}")
+            st.write(f"**Pitch:** {pitch:.6f}")
+            st.write(f"**Yaw:** {yaw:.6f}")
+            st.markdown("### 3D Aircraft Model")
 
-        st.markdown("### Quaternion")
-        quat_df = pd.DataFrame({
-            "Component": ["w", "x", "y", "z"],
-            "Value": [f"{q:.10f}" for q in quat]
-        })
-        st.dataframe(quat_df, use_container_width=True, hide_index=True)
+            with open("low_poly_airplane.glb", "rb") as f:
+                glb_data = f.read()
 
-        st.markdown("### DCM")
-        dcm_df = pd.DataFrame(dcm, columns=["C1", "C2", "C3"], index=["R1", "R2", "R3"])
-        st.dataframe(dcm_df, use_container_width=True)
+            components.html(f"""
+            <html>
+            <head>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
+            </head>
+            <body style="margin:0; background-color:white;">
+            <script>
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0xffffff);
 
+                const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+                camera.position.set(0, 8, 50);
+                camera.lookAt(0, 0, 0);
+
+                const renderer = new THREE.WebGLRenderer({{antialias:true, alpha:true}});
+                renderer.setSize(450, 450);
+                document.body.appendChild(renderer.domElement);
+
+                const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+                scene.add(ambientLight);
+
+                const dirLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
+                dirLight1.position.set(5, 5, 5);
+                scene.add(dirLight1);
+
+                const dirLight2 = new THREE.DirectionalLight(0xffffff, 1.0);
+                dirLight2.position.set(-5, 3, 5);
+                scene.add(dirLight2);
+
+                const loader = new THREE.GLTFLoader();
+
+                const blob = new Blob([new Uint8Array({list(glb_data)})], {{type: 'model/gltf-binary'}});
+                const url = URL.createObjectURL(blob);
+
+                loader.load(url, function(gltf) {{
+                    const model = gltf.scene;
+
+                    model.scale.set(0.4, 0.4, 0.4);
+                    model.position.set(0, 0, 0);
+
+                    const box = new THREE.Box3().setFromObject(model);
+                    const center = box.getCenter(new THREE.Vector3());
+                    model.position.x -= center.x;
+                    model.position.y -= center.y;
+                    model.position.z -= center.z;
+
+                    scene.add(model);
+
+                    function animate() {{
+                       requestAnimationFrame(animate);
+                       model.rotation.y += 0.01;
+                       renderer.render(scene, camera);
+                       }}
+
+                       animate();
+                }});
+            </script>
+            </body>
+            </html>
+            """, height=450)
+            st.markdown("### Quaternion")
+            quat_df = pd.DataFrame({
+                "Component": ["w", "x", "y", "z"],
+                "Value": [f"{q:.10f}" for q in quat]
+            })
+            st.dataframe(quat_df, use_container_width=True, hide_index=True)
+
+            st.markdown("### DCM")
+            dcm_df = pd.DataFrame(dcm, columns=["C1", "C2", "C3"], index=["R1", "R2", "R3"])
+            st.dataframe(dcm_df, use_container_width=True)
 else:
     with right_col:
         st.info("Results will appear here after clicking 'Predict Orientation'.")
